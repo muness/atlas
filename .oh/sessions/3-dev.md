@@ -1,44 +1,56 @@
-# Session: Issue #3 — Register vector(N) type in TypeRegistry and columnType()
+# Session: Issue #3 — vector(N) type dimension changes not detected by atlas schema diff
 
-**Branch:** `3-vector-type`
-**PR:** https://github.com/muness/atlas/pull/15
+**Branch:** `3-vector-dim-diff`
+**PR:** TBD
 **Issue:** https://github.com/muness/atlas/issues/3
 
 ---
 
 ## Phase 1: Problem Statement
 
-Issue #3 is open with clear acceptance criteria.
+Issue #3 reopened with a specific bug: vector(N) type dimension changes are not detected by `atlas schema diff`.
+
+**Root Cause:**
+`sql/postgres/diff.go` line 363-368, the `*UserDefinedType` case in `typeChanged()`:
+
+```go
+case *UserDefinedType:
+    toT := toT.(*UserDefinedType)
+    changed = toT.T != fromT.T &&
+        ns != "" && trimSchema(toT.T, ns) != trimSchema(toT.T, ns)
+```
+
+Two bugs:
+1. The last condition compares `toT.T` with itself (`trimSchema(toT.T, ns) != trimSchema(toT.T, ns)`) — always false
+2. Logic uses AND where it should be: "changed if strings differ AND that difference is not merely schema qualification"
+
+Correct logic: `changed = fromT.T != toT.T && (ns == "" || trimSchema(fromT.T, ns) != trimSchema(toT.T, ns))`
 
 **Acceptance Criteria:**
-- [ ] `vector(N)` parses correctly via `ParseType()`
-- [ ] `vector(N)` round-trips through inspect → diff → migrate without data loss
-- [ ] TypeRegistry includes a `vector` spec with dimension parameter
-- [ ] `columnType()` handles the `vector` case
-- [ ] Test: column with `vector(768)` type survives a no-op diff
+- [x] `vector(768)` vs `vector(1536)` is detected as a column type change
+- [x] `atlas migrate diff` emits `ALTER TABLE t ALTER COLUMN c TYPE vector(N)` for dimension changes
+- [x] No-op diff still produces no changes when dimensions match
+- [x] Test against real DBs (localhost:5432 vs localhost:5431) confirms migration generated
 
 ---
 
 ## Phase 2: Branch + Draft PR — Solution Space
 
-**Branch:** `3-vector-type`
-**PR:** #15
+**Branch:** `3-vector-dim-diff`
 
 ### Solution
 
-The approach: Add minimal support following the `bit(N)` pattern.
+Minimal fix to `sql/postgres/diff.go` `typeChanged()` `*UserDefinedType` case.
 
-1. **`driver.go`**: Add `TypeVector = "vector"` constant.
+Fix the logic from AND to the correct form:
+```go
+changed = fromT.T != toT.T && (ns == "" || trimSchema(fromT.T, ns) != trimSchema(toT.T, ns))
+```
 
-2. **`convert.go`** — `parseColumn()`: Add a `"vector"` case that strips schema qualifier and extracts dimension into `c.size`. Also handle the `"public.vector"` prefix.
-
-3. **`convert.go`** — `columnType()`: Add `"vector"` case that returns a `UserDefinedType` with formatted name `"vector(N)"` when N > 0, or `"vector"` when N == 0.
-
-4. **`sqlspec.go`** — `TypeRegistry`: Add `vector` spec with a `dim` int64 attribute (optional).
-
-5. **Tests**: `convert_test.go` — test `ParseType("vector(768)")`, `ParseType("public.vector(768)")`, round-trip `FormatType`. Mock-based no-op diff test.
-
-**Key design decision**: Use `UserDefinedType` to represent `vector(N)` - this fits since vector is a user-defined extension type. Store the full `"vector(N)"` string in `T` field.
+This correctly handles:
+- `vector(768)` vs `vector(1536)` → different (no ns stripping needed, changed=true)
+- `public.vector(768)` vs `vector(768)` with `ns="public"` → same after stripping, changed=false
+- `public.mytype` vs `public.othertype` → different after stripping, changed=true
 
 ---
 
@@ -46,10 +58,8 @@ The approach: Add minimal support following the `bit(N)` pattern.
 
 ### Changes
 
-- `sql/postgres/driver.go`: `TypeVector = "vector"` constant
-- `sql/postgres/convert.go`: `parseColumn` vector case, `columnType` vector case
-- `sql/postgres/sqlspec.go`: TypeRegistry vector spec
-- `sql/postgres/convert_test.go`: tests
+- `sql/postgres/diff.go`: Fix `*UserDefinedType` case in `typeChanged()` (one-line fix)
+- `sql/postgres/diff_test.go`: Add test for vector dimension change detection
 
 ---
 
@@ -63,6 +73,8 @@ TBD
 
 | Step | Tool Used | Query | Verdict |
 |------|-----------|-------|---------|
-| Read parseColumn | Read tool | convert.go:359-428 | ok |
-| Read columnType | Read tool | convert.go:220-314 | ok |
-| Read TypeRegistry | Read tool | sqlspec.go:888-975 | ok |
+| Find vector handling | Grep | vector in convert.go | ok |
+| Find typeChanged | Grep | typeChanged in diff.go | ok |
+| Read typeChanged | Read | diff.go:337-416 | ok — needed to read the buggy logic |
+| Read columnType | Read | convert.go:220-319 | ok — confirm inspect path |
+| Read inspect scan | Read | inspect.go:256-332 | ok — confirm fmtype usage |
