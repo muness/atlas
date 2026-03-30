@@ -57,6 +57,20 @@ func (i *inspect) InspectRealm(ctx context.Context, opts *schema.InspectRealmOpt
 				return nil, err
 			}
 		}
+		if mode.Is(schema.InspectFuncs) {
+			for _, s := range r.Schemas {
+				if err := i.inspectFunctions(ctx, s); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if mode.Is(schema.InspectTriggers) {
+			for _, s := range r.Schemas {
+				if err := i.inspectTriggers(ctx, s); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if mode.Is(schema.InspectTables) {
 			if err := i.inspectTables(ctx, r, nil); err != nil {
 				return nil, err
@@ -1633,7 +1647,7 @@ FROM
 ORDER BY
 	e.extname
 `
-	// Query to list user-defined functions in a schema.
+	// Query to list user-defined (non-extension) functions in a schema.
 	functionsQuery = `
 SELECT
 	p.proname AS name,
@@ -1644,6 +1658,12 @@ FROM
 WHERE
 	n.nspname = $1
 	AND p.prokind = 'f'
+	AND NOT EXISTS (
+		SELECT 1 FROM pg_depend d
+		WHERE d.classid = 'pg_proc'::regclass
+		AND d.objid = p.oid
+		AND d.deptype = 'e'
+	)
 ORDER BY
 	p.proname
 `
