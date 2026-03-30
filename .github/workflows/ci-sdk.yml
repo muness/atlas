@@ -31,6 +31,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
+      - name: Build atlas CLI
+        run: go build -o /usr/local/bin/atlas ./cmd/atlas
       - name: Run tests
         run: go test -race ./...
         working-directory: ${{ matrix.module }}
@@ -54,6 +56,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
+      - name: Build atlas CLI
+        run: go build -o /usr/local/bin/atlas ./cmd/atlas
       - name: Run e2e tests
         run: go test ./internal/e2e
         working-directory: atlasexec

@@ -1069,7 +1069,10 @@ func (*state) sortChanges(changes []schema.Change) []schema.Change {
 			objRest = append(objRest, c)
 		}
 	}
-	return append(append(append(nonObj, fnAdds...), trgAdds...), objRest...)
+	// objRest contains non-SQLObject AddObjects (e.g. ENUMs), which must precede
+	// tables that reference them. nonObj contains tables and other non-AddObject
+	// changes. Functions must precede triggers since triggers reference them.
+	return append(append(append(objRest, nonObj...), fnAdds...), trgAdds...)
 }
 
 func (*state) detachCycles(changes []schema.Change) ([]schema.Change, error) {
