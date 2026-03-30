@@ -59,6 +59,21 @@ type (
 		Deps    []Object // Objects this view depends on.
 	}
 
+	// SQLObject represents an opaque database object (e.g. function, trigger,
+	// procedure) whose lifecycle Atlas manages by tracking the raw SQL body.
+	// Atlas does not parse the body; it compares a checksum of the trimmed
+	// body to detect changes and replays the body verbatim on apply.
+	SQLObject struct {
+		// Name is the object's unqualified name (e.g. "my_func").
+		Name string
+		// Type describes the kind of object: "function", "trigger", etc.
+		Type string
+		// Body is the complete CREATE statement for the object.
+		Body string
+		// Schema is the schema this object belongs to.
+		Schema *Schema
+	}
+
 	// A Column represents a column definition.
 	Column struct {
 		Name    string
@@ -577,9 +592,10 @@ func (p *Pos) String() string {
 }
 
 // objects.
-func (*Table) obj()    {}
-func (*View) obj()     {}
-func (*EnumType) obj() {}
+func (*Table) obj()     {}
+func (*View) obj()      {}
+func (*EnumType) obj()  {}
+func (*SQLObject) obj() {}
 
 // constraints are objects.
 func (*Index) obj()        {}

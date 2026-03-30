@@ -124,3 +124,30 @@ func ExampleChanges_RemoveIndex() {
 	// *schema.AddColumn(created_at)
 	// *schema.RenameColumn(old_name -> new_name)
 }
+
+// TestSQLObject verifies that SQLObject satisfies the Object interface and
+// that it can be used with AddObject, DropObject, and ModifyObject.
+func TestSQLObject(t *testing.T) {
+	s := schema.New("public")
+	fn := &schema.SQLObject{
+		Name:   "my_func",
+		Type:   "function",
+		Body:   "CREATE OR REPLACE FUNCTION my_func() RETURNS void AS $$ BEGIN NULL; END; $$ LANGUAGE plpgsql",
+		Schema: s,
+	}
+	// Compile-time assertion: SQLObject implements Object.
+	var _ schema.Object = fn
+
+	// AddObject, DropObject, ModifyObject should all accept *SQLObject via Object.
+	add := &schema.AddObject{O: fn}
+	drop := &schema.DropObject{O: fn}
+	mod := &schema.ModifyObject{From: fn, To: fn}
+
+	require.Equal(t, fn, add.O)
+	require.Equal(t, fn, drop.O)
+	require.Equal(t, fn, mod.From)
+	require.Equal(t, fn, mod.To)
+	require.Equal(t, "my_func", fn.Name)
+	require.Equal(t, "function", fn.Type)
+	require.Equal(t, s, fn.Schema)
+}
