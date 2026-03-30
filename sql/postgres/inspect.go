@@ -435,18 +435,18 @@ func (i *inspect) inspectExtensions(ctx context.Context, r *schema.Realm) error 
 	for rows.Next() {
 		var (
 			name, version sql.NullString
-			schema_       sql.NullString
+			extSchema     sql.NullString
 			comment       sql.NullString
 		)
-		if err := rows.Scan(&name, &version, &schema_, &comment); err != nil {
+		if err := rows.Scan(&name, &version, &extSchema, &comment); err != nil {
 			return fmt.Errorf("postgres: scanning extension: %w", err)
 		}
 		e := &Extension{T: name.String}
 		if version.Valid {
 			e.Version = version.String
 		}
-		if schema_.Valid {
-			e.Schema = schema_.String
+		if extSchema.Valid {
+			e.Schema = extSchema.String
 		}
 		if comment.Valid && comment.String != "" {
 			e.Attrs = append(e.Attrs, &schema.Comment{Text: comment.String})
