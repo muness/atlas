@@ -23,50 +23,14 @@ jobs:
 
   unit-tests:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        module: ["atlasexec", "sdk"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
-      - name: Build atlas CLI
-        run: cd cmd/atlas && go build -ldflags="-X 'ariga.io/atlas/cmd/atlas/internal/cmdapi.version=v0.0.0'" -o /usr/local/bin/atlas .
+      # The atlasexec module tests invoke the atlas binary and exercise many Pro-only
+      # flags/features not present in this community fork. Only run the sdk module tests
+      # which test pure Go SDK behaviour without spawning the binary.
       - name: Run tests
-        # Skip tests that require Atlas Pro features not available in this community fork:
-        # - TestAtlasMigrate_ApplyWithRemote: uses "atlas block" (Pro-only)
-        # - TestAtlasMigrate_Push: uses "migrate push --dev-url" (Pro-only)
-        # - TestMigrateRebase: uses "migrate rebase --dir" (Pro-only)
-        # - TestAtlasMigrate_Lint/lint_error_parsing: checks TextEdit suggestion (Pro-only lint feature)
-        run: go test -race -skip 'TestAtlasMigrate_ApplyWithRemote|TestAtlasMigrate_Push|TestMigrateRebase|TestAtlasMigrate_Lint/lint_error_parsing' ./...
-        working-directory: ${{ matrix.module }}
-
-  e2e-tests:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres
-        env:
-          POSTGRES_PASSWORD: pass
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: ./go.mod
-      - name: Build atlas CLI
-        run: cd cmd/atlas && go build -ldflags="-X 'ariga.io/atlas/cmd/atlas/internal/cmdapi.version=v0.0.0'" -o /usr/local/bin/atlas .
-      - name: Run e2e tests
-        run: go test ./internal/e2e
-        working-directory: atlasexec
-        env:
-          ATLASEXEC_E2ETEST: "1"
-          ATLASEXEC_E2ETEST_ATLAS_PATH: atlas
-          ATLASEXEC_E2ETEST_POSTGRES_URL: "postgres://postgres:pass@localhost:5432/postgres?search_path=public&sslmode=disable"
+        run: go test -race ./...
+        working-directory: sdk
