@@ -469,6 +469,45 @@ func TestDiff_TableDiff(t *testing.T) {
 				},
 			}
 		}(),
+		// vector(N) dimension change is detected as a type change.
+		func() testcase {
+			from := schema.NewTable("t1").
+				SetSchema(schema.New("public")).
+				AddColumns(
+					schema.NewColumn("embedding").SetType(&UserDefinedType{T: "vector(768)"}),
+				)
+			to := schema.NewTable("t1").
+				SetSchema(schema.New("public")).
+				AddColumns(
+					schema.NewColumn("embedding").SetType(&UserDefinedType{T: "vector(1536)"}),
+				)
+			return testcase{
+				name: "vector dimension change",
+				from: from,
+				to:   to,
+				wantChanges: []schema.Change{
+					&schema.ModifyColumn{From: from.Columns[0], To: to.Columns[0], Change: schema.ChangeType},
+				},
+			}
+		}(),
+		// vector(N) with same dimension produces no change.
+		func() testcase {
+			from := schema.NewTable("t1").
+				SetSchema(schema.New("public")).
+				AddColumns(
+					schema.NewColumn("embedding").SetType(&UserDefinedType{T: "vector(768)"}),
+				)
+			to := schema.NewTable("t1").
+				SetSchema(schema.New("public")).
+				AddColumns(
+					schema.NewColumn("embedding").SetType(&UserDefinedType{T: "vector(768)"}),
+				)
+			return testcase{
+				name: "vector dimension no change",
+				from: from,
+				to:   to,
+			}
+		}(),
 	}
 	for _, tt := range tests {
 		db, m, err := sqlmock.New()
