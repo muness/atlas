@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "rna-mcp": {
+      "type": "stdio",
+      "command": "/Users/muness/.cargo/bin/repo-native-alignment",
+      "args": ["--repo", "/Users/muness/src/atlas"],
+      "env": {}
+    }
+  }
+}
