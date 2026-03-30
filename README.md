@@ -1,5 +1,16 @@
 # Atlas - Manage Your Database Schema as Code
 
+> **This is a fork of [ariga/atlas](https://github.com/ariga/atlas)** focused on supporting the PostgreSQL features needed for Python/SQLAlchemy applications in Atlas OSS.
+>
+> **Goal:** A SQLAlchemy-managed Postgres schema can run `atlas schema diff` and get a correct, complete migration plan — including extension-backed types and function/trigger definitions — without Atlas Pro or raw SQL escape hatching.
+>
+> **What this fork adds:**
+> - **pgvector extension + `vector(N)` types** — unblocks embedding columns (previously Pro-only)
+> - **PL/pgSQL functions and DML triggers** — tracked as checksum-verified SQL objects; detected and replayed when bodies change
+> - **Custom ENUMs** — adding values supported; drop/reorder not possible (PostgreSQL constraint)
+>
+> See the upstream project at [ariga/atlas](https://github.com/ariga/atlas) for the full feature set.
+
 [![Twitter](https://img.shields.io/twitter/url.svg?label=Follow%20%40atlasgo_io&style=social&url=https%3A%2F%2Ftwitter.com%2Fatlasgo_io)](https://twitter.com/atlasgo_io)
 [![Discord](https://img.shields.io/discord/930720389120794674?label=discord&logo=discord&style=flat-square&logoColor=white)](https://discord.com/invite/zZ6sWVg6NT)
 
