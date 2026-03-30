@@ -1039,7 +1039,37 @@ func convertExclude(schemahcl.Resource, *schema.Table) error {
 }
 
 func (*state) sortChanges(changes []schema.Change) []schema.Change {
-	return sqlx.SortChanges(changes, nil)
+	sorted := sqlx.SortChanges(changes, nil)
+	// Within AddObject changes, functions must precede triggers because PostgreSQL
+	// triggers reference functions. Partition into buckets and reassemble in order:
+	// non-object changes, function adds, trigger adds, other object adds.
+	var (
+		nonObj  []schema.Change
+		fnAdds  []schema.Change
+		trgAdds []schema.Change
+		objRest []schema.Change
+	)
+	for _, c := range sorted {
+		add, ok := c.(*schema.AddObject)
+		if !ok {
+			nonObj = append(nonObj, c)
+			continue
+		}
+		o, ok := add.O.(*schema.SQLObject)
+		if !ok {
+			objRest = append(objRest, c)
+			continue
+		}
+		switch o.Type {
+		case "function":
+			fnAdds = append(fnAdds, c)
+		case "trigger":
+			trgAdds = append(trgAdds, c)
+		default:
+			objRest = append(objRest, c)
+		}
+	}
+	return append(append(append(nonObj, fnAdds...), trgAdds...), objRest...)
 }
 
 func (*state) detachCycles(changes []schema.Change) ([]schema.Change, error) {
