@@ -129,6 +129,14 @@ func (i *inspect) InspectSchema(ctx context.Context, name string, opts *schema.I
 		if err := i.inspectEnums(ctx, r); err != nil {
 			return nil, err
 		}
+		for _, s := range r.Schemas {
+			if err := i.inspectFunctions(ctx, s); err != nil {
+				return nil, err
+			}
+			if err := i.inspectTriggers(ctx, s); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if mode.Is(schema.InspectTables) {
 		if err := i.inspectTables(ctx, r, opts); err != nil {
@@ -452,6 +460,52 @@ func (i *inspect) inspectExtensions(ctx context.Context, r *schema.Realm) error 
 			e.Attrs = append(e.Attrs, &schema.Comment{Text: comment.String})
 		}
 		r.Objects = append(r.Objects, e)
+	}
+	return rows.Err()
+}
+
+// inspectFunctions queries pg_proc for user-defined functions in the given schema
+// and appends SQLObject values (Type="function") to s.Objects.
+func (i *inspect) inspectFunctions(ctx context.Context, s *schema.Schema) error {
+	rows, err := i.QueryContext(ctx, functionsQuery, s.Name)
+	if err != nil {
+		return fmt.Errorf("postgres: querying functions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, body sql.NullString
+		if err := rows.Scan(&name, &body); err != nil {
+			return fmt.Errorf("postgres: scanning function: %w", err)
+		}
+		s.Objects = append(s.Objects, &schema.SQLObject{
+			Name:   name.String,
+			Type:   "function",
+			Body:   body.String,
+			Schema: s,
+		})
+	}
+	return rows.Err()
+}
+
+// inspectTriggers queries pg_trigger for user-defined triggers in the given schema
+// and appends SQLObject values (Type="trigger") to s.Objects.
+func (i *inspect) inspectTriggers(ctx context.Context, s *schema.Schema) error {
+	rows, err := i.QueryContext(ctx, triggersQuery, s.Name)
+	if err != nil {
+		return fmt.Errorf("postgres: querying triggers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, body sql.NullString
+		if err := rows.Scan(&name, &body); err != nil {
+			return fmt.Errorf("postgres: scanning trigger: %w", err)
+		}
+		s.Objects = append(s.Objects, &schema.SQLObject{
+			Name:   name.String,
+			Type:   "trigger",
+			Body:   body.String,
+			Schema: s,
+		})
 	}
 	return rows.Err()
 }
@@ -1578,6 +1632,35 @@ FROM
 	LEFT JOIN pg_namespace n ON n.oid = e.extnamespace
 ORDER BY
 	e.extname
+`
+	// Query to list user-defined functions in a schema.
+	functionsQuery = `
+SELECT
+	p.proname AS name,
+	pg_get_functiondef(p.oid) AS body
+FROM
+	pg_proc p
+	JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE
+	n.nspname = $1
+	AND p.prokind = 'f'
+ORDER BY
+	p.proname
+`
+	// Query to list user-defined triggers in a schema.
+	triggersQuery = `
+SELECT
+	t.tgname AS name,
+	pg_get_triggerdef(t.oid) AS body
+FROM
+	pg_trigger t
+	JOIN pg_class c ON c.oid = t.tgrelid
+	JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE
+	n.nspname = $1
+	AND NOT t.tgisinternal
+ORDER BY
+	t.tgname
 `
 	// Query to list enum values.
 	enumsQuery = `
