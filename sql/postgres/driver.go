@@ -21,6 +21,8 @@ import (
 	"ariga.io/atlas/sql/schema"
 	"ariga.io/atlas/sql/sqlclient"
 	"ariga.io/atlas/sql/sqlspec"
+
+	"github.com/zclconf/go-cty/cty"
 )
 
 type (
@@ -665,8 +667,41 @@ func (s *state) modifyObject(modify *schema.ModifyObject) error {
 
 // RealmObjectDiff returns a changeset for migrating realm (database) objects
 // from one state to the other. For example, adding extensions or users.
-func (*diff) RealmObjectDiff(_, _ *schema.Realm) ([]schema.Change, error) {
-	return nil, nil // unimplemented.
+func (*diff) RealmObjectDiff(from, to *schema.Realm) ([]schema.Change, error) {
+	var changes []schema.Change
+	// Drop or modify extensions.
+	for _, o1 := range from.Objects {
+		e1, ok := o1.(*Extension)
+		if !ok {
+			continue
+		}
+		o2, ok := to.Object(func(o schema.Object) bool {
+			e2, ok := o.(*Extension)
+			return ok && e1.T == e2.T
+		})
+		if !ok {
+			changes = append(changes, &schema.DropObject{O: o1})
+			continue
+		}
+		e2 := o2.(*Extension)
+		if e1.Version != e2.Version {
+			changes = append(changes, &schema.ModifyObject{From: e1, To: e2})
+		}
+	}
+	// Add new extensions.
+	for _, o1 := range to.Objects {
+		e1, ok := o1.(*Extension)
+		if !ok {
+			continue
+		}
+		if _, ok := from.Object(func(o schema.Object) bool {
+			e2, ok := o.(*Extension)
+			return ok && e1.T == e2.T
+		}); !ok {
+			changes = append(changes, &schema.AddObject{O: e1})
+		}
+	}
+	return changes, nil
 }
 
 // SchemaObjectDiff returns a changeset for migrating schema objects from
@@ -735,9 +770,31 @@ func convertPolicies(_ []*sqlspec.Table, ps []*policy, _ *schema.Realm) error {
 	return nil
 }
 
-func convertExtensions(exs []*extension, _ *schema.Realm) error {
-	if len(exs) > 0 {
-		return fmt.Errorf("postgres: extensions are not supported by this version. Use: https://atlasgo.io/getting-started")
+func convertExtensions(exs []*extension, r *schema.Realm) error {
+	for _, ex := range exs {
+		e := &Extension{T: ex.Name}
+		if v, ok := ex.Attr("version"); ok {
+			s, err := v.String()
+			if err != nil {
+				return fmt.Errorf("postgres: reading version for extension %q: %w", ex.Name, err)
+			}
+			e.Version = s
+		}
+		if v, ok := ex.Attr("schema"); ok {
+			s, err := v.String()
+			if err != nil {
+				return fmt.Errorf("postgres: reading schema for extension %q: %w", ex.Name, err)
+			}
+			e.Schema = s
+		}
+		if v, ok := ex.Attr("comment"); ok {
+			s, err := v.String()
+			if err != nil {
+				return fmt.Errorf("postgres: reading comment for extension %q: %w", ex.Name, err)
+			}
+			e.Attrs = append(e.Attrs, &schema.Comment{Text: s})
+		}
+		r.Objects = append(r.Objects, e)
 	}
 	return nil
 }
@@ -763,6 +820,29 @@ func objectSpec(d *doc, spec *specutil.SchemaSpec, s *schema.Schema) error {
 				Schema: specutil.SchemaRef(spec.Schema.Name),
 			})
 		}
+	}
+	return nil
+}
+
+// realmObjectSpec converts realm-level objects (e.g. extensions) into specs.
+func realmObjectSpec(d *doc, r *schema.Realm) error {
+	for _, o := range r.Objects {
+		e, ok := o.(*Extension)
+		if !ok {
+			continue
+		}
+		ex := &extension{Name: e.T}
+		if e.Version != "" {
+			ex.Extra.SetAttr(&schemahcl.Attr{K: "version", V: cty.StringVal(e.Version)})
+		}
+		if e.Schema != "" {
+			ex.Extra.SetAttr(&schemahcl.Attr{K: "schema", V: cty.StringVal(e.Schema)})
+		}
+		var c schema.Comment
+		if sqlx.Has(e.Attrs, &c) && c.Text != "" {
+			ex.Extra.SetAttr(&schemahcl.Attr{K: "comment", V: cty.StringVal(c.Text)})
+		}
+		d.Extensions = append(d.Extensions, ex)
 	}
 	return nil
 }

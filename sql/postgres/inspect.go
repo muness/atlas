@@ -46,6 +46,11 @@ func (i *inspect) InspectRealm(ctx context.Context, opts *schema.InspectRealmOpt
 		r    = schema.NewRealm(schemas...)
 		mode = sqlx.ModeInspectRealm(opts)
 	)
+	if mode.Is(schema.InspectTypes) {
+		if err := i.inspectExtensions(ctx, r); err != nil {
+			return nil, err
+		}
+	}
 	if len(schemas) > 0 {
 		if mode.Is(schema.InspectTypes) {
 			if err := i.inspectEnums(ctx, r); err != nil {
@@ -414,6 +419,38 @@ func (i *inspect) inspectEnums(ctx context.Context, r *schema.Realm) error {
 		e.Values = append(e.Values, v)
 	}
 	return nil
+}
+
+// inspectExtensions queries pg_extension and populates r.Objects with Extension values.
+// Extensions are database-level (realm-level) objects; their names are unique per database.
+func (i *inspect) inspectExtensions(ctx context.Context, r *schema.Realm) error {
+	rows, err := i.QueryContext(ctx, extensionsQuery)
+	if err != nil {
+		return fmt.Errorf("postgres: querying extensions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			name, version sql.NullString
+			schema_       sql.NullString
+			comment       sql.NullString
+		)
+		if err := rows.Scan(&name, &version, &schema_, &comment); err != nil {
+			return fmt.Errorf("postgres: scanning extension: %w", err)
+		}
+		e := &Extension{T: name.String}
+		if version.Valid {
+			e.Version = version.String
+		}
+		if schema_.Valid {
+			e.Schema = schema_.String
+		}
+		if comment.Valid && comment.String != "" {
+			e.Attrs = append(e.Attrs, &schema.Comment{Text: comment.String})
+		}
+		r.Objects = append(r.Objects, e)
+	}
+	return rows.Err()
 }
 
 // indexes queries and appends the indexes of the given table.
@@ -1159,6 +1196,17 @@ type (
 
 	// ReferenceOption describes the ON DELETE and ON UPDATE options for foreign keys.
 	ReferenceOption schema.ReferenceOption
+
+	// Extension represents an installed PostgreSQL extension.
+	// Extensions are realm-level objects; their names are unique within a database.
+	// https://www.postgresql.org/docs/current/extend-extensions.html
+	Extension struct {
+		schema.Object
+		T       string        // Extension name (e.g. "pgvector").
+		Version string        // Installed version (may be empty).
+		Schema  string        // Target schema for relocatable extensions (may be empty).
+		Attrs   []schema.Attr // Extra attributes (e.g. Comment).
+	}
 )
 
 var _ specutil.RefNamer = (*DomainType)(nil)
@@ -1514,6 +1562,19 @@ WHERE
 	t1.table_schema = $1 AND t1.table_name IN (%s)
 ORDER BY
 	t1.table_name, t1.ordinal_position
+`
+	// Query to list installed extensions.
+	extensionsQuery = `
+SELECT
+	e.extname AS name,
+	e.extversion AS version,
+	n.nspname AS schema,
+	obj_description(e.oid, 'pg_extension') AS comment
+FROM
+	pg_extension e
+	LEFT JOIN pg_namespace n ON n.oid = e.extnamespace
+ORDER BY
+	e.extname
 `
 	// Query to list enum values.
 	enumsQuery = `

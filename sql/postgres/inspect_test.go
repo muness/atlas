@@ -697,6 +697,57 @@ func TestInspectMode_InspectRealm(t *testing.T) {
 	}(), realm)
 }
 
+func TestInspect_Extensions(t *testing.T) {
+	db, m, err := sqlmock.New()
+	require.NoError(t, err)
+	mk := mock{m}
+	mk.version("160000")
+	mk.ExpectQuery(sqltest.Escape("SELECT current_setting('search_path'), set_config('search_path', '', false)")).
+		WillReturnRows(sqltest.Rows(`
+ current_setting | set_config
+-----------------+------------
+                 |
+`))
+	mk.ExpectQuery(sqltest.Escape(schemasQuery)).
+		WillReturnRows(sqltest.Rows(`
+ schema_name | comment
+-------------+---------
+ public      | nil
+`))
+	drv, err := Open(db)
+	require.NoError(t, err)
+	// Extensions query runs before enum query (realm-level before schema-level).
+	m.ExpectQuery(sqltest.Escape(extensionsQuery)).
+		WillReturnRows(sqltest.Rows(`
+ name    | version | schema | comment
+---------+---------+--------+----------
+ plpgsql | 1.0     | pg_catalog | nil
+ vector  | 0.7.0   | public | pgvector extension
+`))
+	m.ExpectQuery(sqltest.Escape(fmt.Sprintf(enumsQuery, "$1"))).
+		WillReturnRows(sqlmock.NewRows([]string{"schema_name", "enum_id", "enum_name", "enum_value"}))
+	realm, err := drv.InspectRealm(context.Background(), &schema.InspectRealmOption{
+		Mode: schema.InspectSchemas | schema.InspectTypes,
+	})
+	require.NoError(t, err)
+	require.Len(t, realm.Objects, 2)
+	ext1, ok := realm.Objects[0].(*Extension)
+	require.True(t, ok)
+	require.Equal(t, "plpgsql", ext1.T)
+	require.Equal(t, "1.0", ext1.Version)
+	require.Equal(t, "pg_catalog", ext1.Schema)
+	require.Empty(t, ext1.Attrs) // nil comment.
+	ext2, ok := realm.Objects[1].(*Extension)
+	require.True(t, ok)
+	require.Equal(t, "vector", ext2.T)
+	require.Equal(t, "0.7.0", ext2.Version)
+	require.Equal(t, "public", ext2.Schema)
+	require.Len(t, ext2.Attrs, 1)
+	c, ok := ext2.Attrs[0].(*schema.Comment)
+	require.True(t, ok)
+	require.Equal(t, "pgvector extension", c.Text)
+}
+
 func TestIndexOpClass_UnmarshalText(t *testing.T) {
 	var op IndexOpClass
 	require.NoError(t, op.UnmarshalText([]byte("int4_ops")))

@@ -296,6 +296,9 @@ func (c *Codec) MarshalSpec(v any) ([]byte, error) {
 			}
 			d.merge(d1)
 		}
+		if err := realmObjectSpec(&d, rv); err != nil {
+			return nil, err
+		}
 		if err := specutil.QualifyObjects(d.Tables); err != nil {
 			return nil, err
 		}
