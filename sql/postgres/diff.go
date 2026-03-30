@@ -362,10 +362,9 @@ func typeChanged(from, to *schema.Column, ns string) (bool, error) {
 		changed = t1 != t2
 	case *UserDefinedType:
 		toT := toT.(*UserDefinedType)
-		changed = toT.T != fromT.T &&
-			// In case the type is defined with schema qualifier, but returned without
-			// (inspecting a schema scope), or vice versa, remove before comparing.
-			ns != "" && trimSchema(toT.T, ns) != trimSchema(toT.T, ns)
+		// In case the type is defined with schema qualifier, but returned without
+		// (inspecting a schema scope), or vice versa, strip the qualifier before comparing.
+		changed = fromT.T != toT.T && (ns == "" || trimSchema(fromT.T, ns) != trimSchema(toT.T, ns))
 	case *CompositeType:
 		toT := toT.(*CompositeType)
 		changed = toT.T != fromT.T ||
