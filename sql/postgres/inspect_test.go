@@ -49,6 +49,8 @@ func TestDriver_InspectTable(t *testing.T) {
  public      |   16774 |  state  | off
  public      |   16775 |  status | unknown
 `))
+				m.noFunctions("public")
+				m.noTriggers("public")
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
 					WithArgs("public", "users").
@@ -166,6 +168,8 @@ func TestDriver_InspectTable(t *testing.T) {
 			before: func(m mock) {
 				m.noExtensions()
 				m.noEnums()
+				m.noFunctions("public")
+				m.noTriggers("public")
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
 					WithArgs("public", "users").
@@ -242,6 +246,8 @@ users           | tsx             | gist        | ts          | f        | f    
 			before: func(m mock) {
 				m.noExtensions()
 				m.noEnums()
+				m.noFunctions("public")
+				m.noTriggers("public")
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
 					WithArgs("public", "users").
@@ -291,6 +297,8 @@ self_reference  | users      | uid         | public       | users               
 			before: func(m mock) {
 				m.noExtensions()
 				m.noEnums()
+				m.noFunctions("public")
+				m.noTriggers("public")
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
 					WithArgs("public", "users").
@@ -380,6 +388,8 @@ func TestDriver_InspectPartitionedTable(t *testing.T) {
 `))
 	mk.noExtensions()
 	mk.noEnums()
+	mk.noFunctions("public")
+	mk.noTriggers("public")
 	m.ExpectQuery(sqltest.Escape(fmt.Sprintf(tablesQuery, "$1"))).
 		WithArgs("public").
 		WillReturnRows(sqltest.Rows(`
@@ -812,4 +822,16 @@ func (m mock) noEnums() {
 func (m mock) noExtensions() {
 	m.ExpectQuery(sqltest.Escape(extensionsQuery)).
 		WillReturnRows(sqlmock.NewRows([]string{"name", "version", "schema", "comment"}))
+}
+
+func (m mock) noFunctions(schemaName string) {
+	m.ExpectQuery(sqltest.Escape(functionsQuery)).
+		WithArgs(schemaName).
+		WillReturnRows(sqlmock.NewRows([]string{"name", "body"}))
+}
+
+func (m mock) noTriggers(schemaName string) {
+	m.ExpectQuery(sqltest.Escape(triggersQuery)).
+		WithArgs(schemaName).
+		WillReturnRows(sqlmock.NewRows([]string{"name", "body"}))
 }
