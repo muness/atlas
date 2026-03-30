@@ -31,15 +31,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
-      - uses: ariga/setup-atlas@v0
-        with:
-          cloud-token: ${{ secrets.ATLAS_TOKEN }}
-        env:
-          ATLAS_DEBUG: "true"
       - name: Run tests
         run: go test -race ./...
         working-directory: ${{ matrix.module }}
-  
+
   e2e-tests:
     runs-on: ubuntu-latest
     services:
@@ -59,11 +54,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
-      - uses: ariga/setup-atlas@v0
-        with:
-          cloud-token: ${{ secrets.ATLAS_TOKEN }}
-        env:
-          ATLAS_DEBUG: "true"
       - name: Run e2e tests
         run: go test ./internal/e2e
         working-directory: atlasexec
