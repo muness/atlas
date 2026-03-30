@@ -286,6 +286,12 @@ func columnType(c *columnDesc) (schema.Type, error) {
 			}
 			typ.(*ArrayType).Type = tt
 		}
+	case TypeVector:
+		name := TypeVector
+		if c.size > 0 {
+			name = fmt.Sprintf("%s(%d)", TypeVector, c.size)
+		}
+		typ = &UserDefinedType{T: name}
 	case TypeTSVector, TypeTSQuery:
 		typ = &TextSearchType{T: t}
 	case TypeInt4Range, TypeInt4MultiRange, TypeInt8Range, TypeInt8MultiRange, TypeNumRange, TypeNumMultiRange,
@@ -387,6 +393,15 @@ func parseColumn(s string) (*columnDesc, error) {
 			if err != nil {
 				return nil, fmt.Errorf("postgres: parse scale %q: %w", parts[1], err)
 			}
+		}
+	case TypeVector, "public.vector":
+		c.typ = TypeVector
+		if len(parts) > 1 {
+			dim, err := strconv.ParseInt(parts[1], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("postgres: parse vector dimension %q: %w", parts[1], err)
+			}
+			c.size = dim
 		}
 	case TypeBit:
 		if err := parseBitParts(parts, c); err != nil {

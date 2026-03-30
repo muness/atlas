@@ -969,6 +969,23 @@ var TypeRegistry = schemahcl.NewRegistry(
 		schemahcl.NewTypeSpec(TypeDateRange),
 		schemahcl.NewTypeSpec(TypeDateMultiRange),
 		schemahcl.NewTypeSpec("hstore"),
+		schemahcl.NewTypeSpec(
+			TypeVector,
+			schemahcl.WithAttributes(&schemahcl.TypeAttr{Name: "dim", Kind: reflect.Int64}),
+			schemahcl.WithFromSpec(func(t *schemahcl.Type) (schema.Type, error) {
+				name := TypeVector
+				if a, ok := attr(t, "dim"); ok {
+					dim, err := a.Int64()
+					if err != nil {
+						return nil, fmt.Errorf("postgres: parsing vector dim: %w", err)
+					}
+					if dim > 0 {
+						name = fmt.Sprintf("%s(%d)", TypeVector, dim)
+					}
+				}
+				return &UserDefinedType{T: name}, nil
+			}),
+		),
 		schemahcl.NewTypeSpec(TypeXID),
 		schemahcl.NewTypeSpec(TypeXID8),
 	),
@@ -1043,6 +1060,20 @@ func typeSpec(t schema.Type) (*schemahcl.Type, error) {
 			spec.Attrs = []*schemahcl.Attr{schemahcl.IntAttr("precision", *p)}
 		}
 		return spec, nil
+	}
+	// Handle vector(N) as a proper TypeSpec with dim attribute.
+	if ut, ok := t.(*UserDefinedType); ok {
+		base := strings.TrimPrefix(ut.T, "public.")
+		if base == TypeVector || strings.HasPrefix(base, TypeVector+"(") {
+			spec := &schemahcl.Type{T: TypeVector}
+			if idx := strings.Index(base, "("); idx != -1 {
+				dimStr := strings.Trim(base[idx:], "()")
+				if dim, err := strconv.ParseInt(dimStr, 10, 64); err == nil && dim > 0 {
+					spec.Attrs = []*schemahcl.Attr{schemahcl.Int64Attr("dim", dim)}
+				}
+			}
+			return spec, nil
+		}
 	}
 	s, err := FormatType(t)
 	if err != nil {
