@@ -39,6 +39,7 @@ func TestDriver_InspectTable(t *testing.T) {
 		{
 			name: "column types",
 			before: func(m mock) {
+				m.noExtensions()
 				m.ExpectQuery(sqltest.Escape(fmt.Sprintf(enumsQuery, "$1"))).
 					WithArgs("public").
 					WillReturnRows(sqltest.Rows(`
@@ -163,6 +164,7 @@ func TestDriver_InspectTable(t *testing.T) {
 		{
 			name: "table indexes",
 			before: func(m mock) {
+				m.noExtensions()
 				m.noEnums()
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
@@ -238,6 +240,7 @@ users           | tsx             | gist        | ts          | f        | f    
 		{
 			name: "fks",
 			before: func(m mock) {
+				m.noExtensions()
 				m.noEnums()
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
@@ -286,6 +289,7 @@ self_reference  | users      | uid         | public       | users               
 		{
 			name: "check",
 			before: func(m mock) {
+				m.noExtensions()
 				m.noEnums()
 				m.tableExists("public", "users", true)
 				m.ExpectQuery(queryColumns).
@@ -370,10 +374,11 @@ func TestDriver_InspectPartitionedTable(t *testing.T) {
 	require.NoError(t, err)
 	mk.ExpectQuery(sqltest.Escape(fmt.Sprintf(schemasQueryArgs, "= CURRENT_SCHEMA()"))).
 		WillReturnRows(sqltest.Rows(`
- schema_name | comment 
+ schema_name | comment
 -------------+---------
  public      | nil
 `))
+	mk.noExtensions()
 	mk.noEnums()
 	m.ExpectQuery(sqltest.Escape(fmt.Sprintf(tablesQuery, "$1"))).
 		WithArgs("public").
@@ -802,4 +807,9 @@ func (m mock) noChecks() {
 func (m mock) noEnums() {
 	m.ExpectQuery(queryEnums).
 		WillReturnRows(sqlmock.NewRows([]string{"schema_name", "enum_name", "comment", "enum_type", "enum_value"}))
+}
+
+func (m mock) noExtensions() {
+	m.ExpectQuery(sqltest.Escape(extensionsQuery)).
+		WillReturnRows(sqlmock.NewRows([]string{"name", "version", "schema", "comment"}))
 }

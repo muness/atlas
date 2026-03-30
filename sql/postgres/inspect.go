@@ -123,6 +123,9 @@ func (i *inspect) InspectSchema(ctx context.Context, name string, opts *schema.I
 		mode = sqlx.ModeInspectSchema(opts)
 	)
 	if mode.Is(schema.InspectTypes) {
+		if err := i.inspectExtensions(ctx, r); err != nil {
+			return nil, err
+		}
 		if err := i.inspectEnums(ctx, r); err != nil {
 			return nil, err
 		}
