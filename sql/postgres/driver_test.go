@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"ariga.io/atlas/schemahcl"
 	"ariga.io/atlas/sql/internal/sqltest"
 	"ariga.io/atlas/sql/migrate"
 	"ariga.io/atlas/sql/schema"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
+	"github.com/zclconf/go-cty/cty"
 )
 
 func TestDriver_LockAcquired(t *testing.T) {
@@ -238,6 +240,68 @@ func (m *mockInspector) InspectSchema(context.Context, string, *schema.InspectOp
 
 func (m *mockInspector) InspectRealm(context.Context, *schema.InspectRealmOption) (*schema.Realm, error) {
 	return m.realm, nil
+}
+
+func TestConvertExtensions(t *testing.T) {
+	r := &schema.Realm{}
+	exs := []*extension{
+		{Name: "pgvector"},
+		{Name: "uuid-ossp"},
+	}
+	exs[0].Extra.SetAttr(&schemahcl.Attr{K: "version", V: cty.StringVal("0.7.0")})
+	exs[0].Extra.SetAttr(&schemahcl.Attr{K: "schema", V: cty.StringVal("public")})
+	exs[1].Extra.SetAttr(&schemahcl.Attr{K: "comment", V: cty.StringVal("UUID generation functions")})
+	require.NoError(t, convertExtensions(exs, r))
+	require.Len(t, r.Objects, 2)
+
+	ext1, ok := r.Objects[0].(*Extension)
+	require.True(t, ok)
+	require.Equal(t, "pgvector", ext1.T)
+	require.Equal(t, "0.7.0", ext1.Version)
+	require.Equal(t, "public", ext1.Schema)
+	require.Empty(t, ext1.Attrs)
+
+	ext2, ok := r.Objects[1].(*Extension)
+	require.True(t, ok)
+	require.Equal(t, "uuid-ossp", ext2.T)
+	require.Empty(t, ext2.Version)
+	require.Empty(t, ext2.Schema)
+	require.Len(t, ext2.Attrs, 1)
+	c, ok := ext2.Attrs[0].(*schema.Comment)
+	require.True(t, ok)
+	require.Equal(t, "UUID generation functions", c.Text)
+}
+
+func TestRealmObjectDiff_Extensions(t *testing.T) {
+	d := &diff{}
+	from := &schema.Realm{
+		Objects: []schema.Object{
+			&Extension{T: "pgvector", Version: "0.6.0"},
+			&Extension{T: "uuid-ossp"},
+		},
+	}
+	to := &schema.Realm{
+		Objects: []schema.Object{
+			&Extension{T: "pgvector", Version: "0.7.0"}, // version changed
+			&Extension{T: "postgis"},                     // new
+			// uuid-ossp dropped
+		},
+	}
+	changes, err := d.RealmObjectDiff(from, to)
+	require.NoError(t, err)
+	require.Len(t, changes, 3)
+	// from loop: pgvector version changed, uuid-ossp dropped.
+	mod, ok := changes[0].(*schema.ModifyObject)
+	require.True(t, ok, "expected ModifyObject for pgvector")
+	require.Equal(t, "pgvector", mod.From.(*Extension).T)
+	require.Equal(t, "0.7.0", mod.To.(*Extension).Version)
+	drop, ok := changes[1].(*schema.DropObject)
+	require.True(t, ok, "expected DropObject for uuid-ossp")
+	require.Equal(t, "uuid-ossp", drop.O.(*Extension).T)
+	// to loop: postgis is new.
+	add, ok := changes[2].(*schema.AddObject)
+	require.True(t, ok, "expected AddObject for postgis")
+	require.Equal(t, "postgis", add.O.(*Extension).T)
 }
 
 type mockPlanApplier struct {

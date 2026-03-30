@@ -2252,3 +2252,42 @@ schema "public" {
 	require.Equal(t, &IndexInclude{Columns: []*schema.Column{s.Tables[0].Columns[1]}}, u3.Attrs[0])
 	require.Equal(t, UniqueConstraint("u3"), u3.Attrs[1].(*Constraint))
 }
+
+func TestMarshalSpec_Extension(t *testing.T) {
+	r := schema.NewRealm(schema.New("public"))
+	r.Objects = []schema.Object{
+		&Extension{T: "pgvector", Version: "0.7.0", Schema: "public"},
+		&Extension{T: "uuid-ossp"},
+	}
+	got, err := MarshalHCL.MarshalSpec(r)
+	require.NoError(t, err)
+	require.Contains(t, string(got), `extension "pgvector"`)
+	require.Contains(t, string(got), `version = "0.7.0"`)
+	require.Contains(t, string(got), `schema  = "public"`)
+	require.Contains(t, string(got), `extension "uuid-ossp"`)
+}
+
+func TestEvalHCL_Extension(t *testing.T) {
+	const hcl = `
+extension "pgvector" {
+  version = "0.7.0"
+  schema  = "public"
+}
+extension "uuid-ossp" {
+}
+schema "public" {
+}
+`
+	var r schema.Realm
+	require.NoError(t, EvalHCLBytes([]byte(hcl), &r, nil))
+	require.Len(t, r.Objects, 2)
+	ext1, ok := r.Objects[0].(*Extension)
+	require.True(t, ok, "expected *Extension")
+	require.Equal(t, "pgvector", ext1.T)
+	require.Equal(t, "0.7.0", ext1.Version)
+	require.Equal(t, "public", ext1.Schema)
+	ext2, ok := r.Objects[1].(*Extension)
+	require.True(t, ok, "expected *Extension")
+	require.Equal(t, "uuid-ossp", ext2.T)
+	require.Empty(t, ext2.Version)
+}
