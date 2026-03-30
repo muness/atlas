@@ -32,7 +32,7 @@ jobs:
         with:
           go-version-file: ./go.mod
       - name: Build atlas CLI
-        run: go build -o /usr/local/bin/atlas ./cmd/atlas
+        run: cd cmd/atlas && go build -o /usr/local/bin/atlas .
       - name: Run tests
         run: go test -race ./...
         working-directory: ${{ matrix.module }}
@@ -57,7 +57,7 @@ jobs:
         with:
           go-version-file: ./go.mod
       - name: Build atlas CLI
-        run: go build -o /usr/local/bin/atlas ./cmd/atlas
+        run: cd cmd/atlas && go build -o /usr/local/bin/atlas .
       - name: Run e2e tests
         run: go test ./internal/e2e
         working-directory: atlasexec
