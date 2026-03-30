@@ -505,6 +505,7 @@ const (
 	TypeTSQuery     = "tsquery"
 	TypeTSVector    = "tsvector"
 	TypeUserDefined = "user-defined"
+	TypeVector      = "vector" // pgvector extension type.
 
 	TypeInt4Range      = "int4range"
 	TypeInt4MultiRange = "int4multirange"

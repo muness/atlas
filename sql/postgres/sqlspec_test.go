@@ -1798,6 +1798,14 @@ func TestTypes(t *testing.T) {
 			typeExpr: "xid8",
 			expected: &schema.IntegerType{T: TypeXID8},
 		},
+		{
+			typeExpr: "vector(768)",
+			expected: &UserDefinedType{T: "vector(768)"},
+		},
+		{
+			typeExpr: "vector",
+			expected: &UserDefinedType{T: "vector"},
+		},
 	} {
 		t.Run(tt.typeExpr, func(t *testing.T) {
 			var test schema.Schema
@@ -1994,6 +2002,66 @@ func TestParseType_Interval(t *testing.T) {
 
 func TestRegistrySanity(t *testing.T) {
 	spectest.RegistrySanityTest(t, TypeRegistry, []string{"enum"})
+}
+
+func TestParseType_Vector(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected schema.Type
+	}{
+		{
+			input:    "vector(768)",
+			expected: &UserDefinedType{T: "vector(768)"},
+		},
+		{
+			input:    "public.vector(768)",
+			expected: &UserDefinedType{T: "vector(768)"},
+		},
+		{
+			input:    "vector",
+			expected: &UserDefinedType{T: "vector"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseType(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestFormatType_Vector(t *testing.T) {
+	tests := []struct {
+		input    schema.Type
+		expected string
+	}{
+		{
+			input:    &UserDefinedType{T: "vector(768)"},
+			expected: "vector(768)",
+		},
+		{
+			input:    &UserDefinedType{T: "vector"},
+			expected: "vector",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			got, err := FormatType(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+// TestNoOpDiff_Vector verifies that a vector(768) column produces no type
+// change when compared to itself — the inspect → diff path should be a no-op.
+func TestNoOpDiff_Vector(t *testing.T) {
+	from := schema.NewColumn("embedding").SetType(&UserDefinedType{T: "vector(768)"})
+	to := schema.NewColumn("embedding").SetType(&UserDefinedType{T: "vector(768)"})
+	changed, err := typeChanged(from, to, "public")
+	require.NoError(t, err)
+	require.False(t, changed, "vector(768) column should not report a type change when unchanged")
 }
 
 func TestInputVars(t *testing.T) {
