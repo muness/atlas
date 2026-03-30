@@ -211,7 +211,7 @@ func (c *Client) WhoAmI(ctx context.Context, params *WhoAmIParams) (*WhoAmI, err
 	return firstResult(jsonDecode[WhoAmI](c.runCommand(ctx, args)))
 }
 
-var reVersion = regexp.MustCompile(`^atlas version v(\d+\.\d+.\d+)-?([a-z0-9]*)?`)
+var reVersion = regexp.MustCompile(`^atlas (?:community )?version v(\d+\.\d+.\d+)-?([a-z0-9]*)?`)
 
 // Version runs the 'version' command.
 func (c *Client) Version(ctx context.Context) (*Version, error) {
