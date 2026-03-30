@@ -156,3 +156,89 @@ func TestIntegration_InspectFunctionsAndTriggers(t *testing.T) {
 	require.Contains(t, funcNames, "log_event", "log_event function must be inspected")
 	require.Contains(t, trigNames, "events_log", "events_log trigger must be inspected")
 }
+
+// TestIntegration_SQLObjectDiff verifies the end-to-end diff pipeline for SQLObjects:
+// inspect schema state, modify a function body, compute diff, assert ModifyObject emitted.
+func TestIntegration_SQLObjectDiff(t *testing.T) {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	rawDB, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { rawDB.Close() })
+	rawDrv, err := Open(rawDB)
+	require.NoError(t, err)
+	drv := rawDrv.(*Driver)
+	ctx := context.Background()
+
+	schemaName := "atlas_sqlobject_diff_test"
+	_, err = rawDB.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schemaName))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		rawDB.ExecContext(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
+	})
+
+	// Create v1 of the function.
+	_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION %s.greet()
+		RETURNS text AS $$
+		BEGIN
+			RETURN 'hello v1';
+		END;
+		$$ LANGUAGE plpgsql
+	`, schemaName))
+	require.NoError(t, err)
+
+	opts := &schema.InspectOptions{
+		Mode: schema.InspectSchemas | schema.InspectTypes,
+	}
+
+	// Inspect "from" state (v1).
+	from, err := drv.InspectSchema(ctx, schemaName, opts)
+	require.NoError(t, err)
+
+	// Update the function body in the database (v2).
+	_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION %s.greet()
+		RETURNS text AS $$
+		BEGIN
+			RETURN 'hello v2';
+		END;
+		$$ LANGUAGE plpgsql
+	`, schemaName))
+	require.NoError(t, err)
+
+	// Inspect "to" state (v2).
+	to, err := drv.InspectSchema(ctx, schemaName, opts)
+	require.NoError(t, err)
+
+	// Compute diff.
+	changes, err := drv.SchemaDiff(from, to)
+	require.NoError(t, err)
+
+	// Should have exactly one ModifyObject for the function.
+	var modChanges []*schema.ModifyObject
+	for _, c := range changes {
+		if mod, ok := c.(*schema.ModifyObject); ok {
+			modChanges = append(modChanges, mod)
+		}
+	}
+	require.Len(t, modChanges, 1, "expected exactly one ModifyObject for the changed function")
+	mod := modChanges[0]
+	fromFn, ok := mod.From.(*schema.SQLObject)
+	require.True(t, ok)
+	toFn, ok := mod.To.(*schema.SQLObject)
+	require.True(t, ok)
+	require.Equal(t, "greet", fromFn.Name)
+	require.Equal(t, "greet", toFn.Name)
+	require.NotEqual(t, fromFn.Body, toFn.Body, "v1 and v2 bodies must differ")
+	require.Contains(t, toFn.Body, "hello v2")
+
+	// Plan the migration and verify the SQL output.
+	plan, err := drv.PlanChanges(ctx, "diff-test", changes)
+	require.NoError(t, err)
+	require.Len(t, plan.Changes, 1)
+	require.Contains(t, plan.Changes[0].Cmd, "hello v2", "plan must contain v2 body")
+}
