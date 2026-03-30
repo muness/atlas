@@ -304,6 +304,121 @@ func TestRealmObjectDiff_Extensions(t *testing.T) {
 	require.Equal(t, "postgis", add.O.(*Extension).T)
 }
 
+// TestSchemaObjectDiff_SQLObject verifies that SchemaObjectDiff correctly detects
+// add, drop, no-op, and modify for SQLObject (functions and triggers).
+func TestSchemaObjectDiff_SQLObject(t *testing.T) {
+	d := &diff{}
+	s := schema.New("public")
+
+	funcV1 := &schema.SQLObject{
+		Name:   "my_func",
+		Type:   "function",
+		Body:   "CREATE OR REPLACE FUNCTION public.my_func() RETURNS void AS $$ BEGIN NULL; END; $$ LANGUAGE plpgsql",
+		Schema: s,
+	}
+	funcV2 := &schema.SQLObject{
+		Name:   "my_func",
+		Type:   "function",
+		Body:   "CREATE OR REPLACE FUNCTION public.my_func() RETURNS void AS $$ BEGIN RAISE NOTICE 'v2'; END; $$ LANGUAGE plpgsql",
+		Schema: s,
+	}
+	funcSame := &schema.SQLObject{
+		Name:   "my_func",
+		Type:   "function",
+		Body:   funcV1.Body, // identical body
+		Schema: s,
+	}
+	trig := &schema.SQLObject{
+		Name:   "my_trig",
+		Type:   "trigger",
+		Body:   "CREATE TRIGGER my_trig AFTER INSERT ON public.events FOR EACH ROW EXECUTE FUNCTION public.my_func()",
+		Schema: s,
+	}
+
+	t.Run("add function", func(t *testing.T) {
+		from := schema.New("public")
+		to := schema.New("public").AddObjects(funcV1)
+		changes, err := d.SchemaObjectDiff(from, to, nil)
+		require.NoError(t, err)
+		require.Len(t, changes, 1)
+		add, ok := changes[0].(*schema.AddObject)
+		require.True(t, ok)
+		require.Equal(t, funcV1, add.O)
+	})
+
+	t.Run("drop function", func(t *testing.T) {
+		from := schema.New("public").AddObjects(funcV1)
+		to := schema.New("public")
+		changes, err := d.SchemaObjectDiff(from, to, nil)
+		require.NoError(t, err)
+		require.Len(t, changes, 1)
+		drop, ok := changes[0].(*schema.DropObject)
+		require.True(t, ok)
+		require.Equal(t, funcV1, drop.O)
+	})
+
+	t.Run("no-op when body unchanged", func(t *testing.T) {
+		from := schema.New("public").AddObjects(funcV1)
+		to := schema.New("public").AddObjects(funcSame)
+		changes, err := d.SchemaObjectDiff(from, to, nil)
+		require.NoError(t, err)
+		require.Empty(t, changes, "identical body must produce no changes")
+	})
+
+	t.Run("modify function when body changes", func(t *testing.T) {
+		from := schema.New("public").AddObjects(funcV1)
+		to := schema.New("public").AddObjects(funcV2)
+		changes, err := d.SchemaObjectDiff(from, to, nil)
+		require.NoError(t, err)
+		require.Len(t, changes, 1)
+		mod, ok := changes[0].(*schema.ModifyObject)
+		require.True(t, ok)
+		require.Equal(t, funcV1, mod.From)
+		require.Equal(t, funcV2, mod.To)
+	})
+
+	t.Run("add trigger", func(t *testing.T) {
+		from := schema.New("public")
+		to := schema.New("public").AddObjects(trig)
+		changes, err := d.SchemaObjectDiff(from, to, nil)
+		require.NoError(t, err)
+		require.Len(t, changes, 1)
+		_, ok := changes[0].(*schema.AddObject)
+		require.True(t, ok)
+	})
+}
+
+// TestSQLObjectChecksum verifies the checksum is stable and whitespace-insensitive.
+func TestSQLObjectChecksum(t *testing.T) {
+	o1 := &schema.SQLObject{Body: "  SELECT 1  "}
+	o2 := &schema.SQLObject{Body: "SELECT 1"}
+	require.Equal(t, sqlObjectChecksum(o1), sqlObjectChecksum(o2), "trimmed bodies should produce equal checksums")
+	o3 := &schema.SQLObject{Body: "SELECT 2"}
+	require.NotEqual(t, sqlObjectChecksum(o1), sqlObjectChecksum(o3), "different bodies should differ")
+}
+
+// TestSQLObjectDropStmt verifies DROP statement generation.
+func TestSQLObjectDropStmt(t *testing.T) {
+	s := schema.New("public")
+
+	t.Run("function drop", func(t *testing.T) {
+		o := &schema.SQLObject{Name: "my_func", Type: "function", Schema: s}
+		got := sqlObjectDropStmt(o)
+		require.Equal(t, "DROP FUNCTION IF EXISTS public.my_func", got)
+	})
+
+	t.Run("trigger drop with table parsed from body", func(t *testing.T) {
+		o := &schema.SQLObject{
+			Name:   "my_trig",
+			Type:   "trigger",
+			Body:   "CREATE TRIGGER my_trig AFTER INSERT ON public.events FOR EACH ROW EXECUTE FUNCTION public.my_func()",
+			Schema: s,
+		}
+		got := sqlObjectDropStmt(o)
+		require.Equal(t, "DROP TRIGGER IF EXISTS my_trig ON public.events", got)
+	})
+}
+
 type mockPlanApplier struct {
 	planned []schema.Change
 	applied []schema.Change

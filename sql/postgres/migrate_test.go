@@ -2000,3 +2000,77 @@ func TestIndentedPlan(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanChanges_SQLObject verifies that AddObject, DropObject, and ModifyObject
+// for schema.SQLObject (functions and triggers) are translated to the correct SQL.
+func TestPlanChanges_SQLObject(t *testing.T) {
+	s := schema.New("public")
+
+	funcBody := "CREATE OR REPLACE FUNCTION public.my_func() RETURNS void AS $$ BEGIN NULL; END; $$ LANGUAGE plpgsql"
+	funcBodyV2 := "CREATE OR REPLACE FUNCTION public.my_func() RETURNS void AS $$ BEGIN RAISE NOTICE 'v2'; END; $$ LANGUAGE plpgsql"
+	trigBody := "CREATE TRIGGER my_trig AFTER INSERT ON public.events FOR EACH ROW EXECUTE FUNCTION public.my_func()"
+	trigBodyV2 := "CREATE TRIGGER my_trig AFTER INSERT ON public.events FOR EACH ROW EXECUTE FUNCTION public.my_func_v2()"
+
+	fn := &schema.SQLObject{Name: "my_func", Type: "function", Body: funcBody, Schema: s}
+	fnV2 := &schema.SQLObject{Name: "my_func", Type: "function", Body: funcBodyV2, Schema: s}
+	trig := &schema.SQLObject{Name: "my_trig", Type: "trigger", Body: trigBody, Schema: s}
+	trigV2 := &schema.SQLObject{Name: "my_trig", Type: "trigger", Body: trigBodyV2, Schema: s}
+
+	tests := []struct {
+		name     string
+		changes  []schema.Change
+		wantCmds []string
+	}{
+		{
+			name:     "add function",
+			changes:  []schema.Change{&schema.AddObject{O: fn}},
+			wantCmds: []string{funcBody},
+		},
+		{
+			name:     "drop function",
+			changes:  []schema.Change{&schema.DropObject{O: fn}},
+			wantCmds: []string{"DROP FUNCTION IF EXISTS public.my_func"},
+		},
+		{
+			name:    "modify function",
+			changes: []schema.Change{&schema.ModifyObject{From: fn, To: fnV2}},
+			// CREATE OR REPLACE handles the update in a single statement.
+			wantCmds: []string{funcBodyV2},
+		},
+		{
+			name:     "add trigger",
+			changes:  []schema.Change{&schema.AddObject{O: trig}},
+			wantCmds: []string{trigBody},
+		},
+		{
+			name:     "drop trigger",
+			changes:  []schema.Change{&schema.DropObject{O: trig}},
+			wantCmds: []string{"DROP TRIGGER IF EXISTS my_trig ON public.events"},
+		},
+		{
+			name:    "modify trigger",
+			changes: []schema.Change{&schema.ModifyObject{From: trig, To: trigV2}},
+			// Triggers require DROP + CREATE since PostgreSQL has no CREATE OR REPLACE TRIGGER.
+			wantCmds: []string{
+				"DROP TRIGGER IF EXISTS my_trig ON public.events",
+				trigBodyV2,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mk, err := sqlmock.New()
+			require.NoError(t, err)
+			mock{mk}.version("130000")
+			drv, err := Open(db)
+			require.NoError(t, err)
+			plan, err := drv.PlanChanges(context.Background(), tt.name, tt.changes)
+			require.NoError(t, err)
+			require.Len(t, plan.Changes, len(tt.wantCmds))
+			for i, cmd := range tt.wantCmds {
+				require.Equal(t, cmd, plan.Changes[i].Cmd)
+			}
+		})
+	}
+}

@@ -6,12 +6,15 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"hash/fnv"
 	"math/rand"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"ariga.io/atlas/schemahcl"
@@ -636,6 +639,14 @@ func (s *state) addObject(add *schema.AddObject) error {
 			Reverse: drop,
 			Comment: fmt.Sprintf("create enum type %q", o.T),
 		})
+	case *schema.SQLObject:
+		body := strings.TrimSpace(o.Body)
+		s.append(&migrate.Change{
+			Source:  add,
+			Cmd:     body,
+			Reverse: sqlObjectDropStmt(o),
+			Comment: fmt.Sprintf("create %s %q", o.Type, o.Name),
+		})
 	default:
 		// unsupported object type.
 	}
@@ -652,6 +663,13 @@ func (s *state) dropObject(drop *schema.DropObject) error {
 			Reverse: create,
 			Comment: fmt.Sprintf("drop enum type %q", o.T),
 		})
+	case *schema.SQLObject:
+		s.append(&migrate.Change{
+			Source:  drop,
+			Cmd:     sqlObjectDropStmt(o),
+			Reverse: strings.TrimSpace(o.Body),
+			Comment: fmt.Sprintf("drop %s %q", o.Type, o.Name),
+		})
 	default:
 		// unsupported object type.
 	}
@@ -662,7 +680,41 @@ func (s *state) modifyObject(modify *schema.ModifyObject) error {
 	if _, ok := modify.From.(*schema.EnumType); ok {
 		return s.alterEnum(modify)
 	}
-	return nil // unimplemented.
+	if from, ok := modify.From.(*schema.SQLObject); ok {
+		to := modify.To.(*schema.SQLObject)
+		switch from.Type {
+		case "function":
+			// PostgreSQL supports CREATE OR REPLACE FUNCTION — emit the new body directly.
+			body := strings.TrimSpace(to.Body)
+			s.append(&migrate.Change{
+				Source:  modify,
+				Cmd:     body,
+				Reverse: strings.TrimSpace(from.Body),
+				Comment: fmt.Sprintf("modify function %q", to.Name),
+			})
+		case "trigger":
+			// Triggers do not support OR REPLACE in PostgreSQL — drop then recreate.
+			dropOld := sqlObjectDropStmt(from)
+			createNew := strings.TrimSpace(to.Body)
+			dropNew := sqlObjectDropStmt(to)
+			createOld := strings.TrimSpace(from.Body)
+			s.append(
+				&migrate.Change{
+					Source:  modify,
+					Cmd:     dropOld,
+					Reverse: createOld,
+					Comment: fmt.Sprintf("drop trigger %q before recreate", from.Name),
+				},
+				&migrate.Change{
+					Source:  modify,
+					Cmd:     createNew,
+					Reverse: dropNew,
+					Comment: fmt.Sprintf("modify trigger %q", to.Name),
+				},
+			)
+		}
+	}
+	return nil
 }
 
 
@@ -709,38 +761,84 @@ func (*diff) RealmObjectDiff(from, to *schema.Realm) ([]schema.Change, error) {
 // one state to the other.
 func (*diff) SchemaObjectDiff(from, to *schema.Schema, _ *schema.DiffOptions) ([]schema.Change, error) {
 	var changes []schema.Change
-	// Drop or modify enums.
+	// Drop or modify enums and SQLObjects.
 	for _, o1 := range from.Objects {
-		e1, ok := o1.(*schema.EnumType)
-		if !ok {
-			continue // Unsupported object type.
-		}
-		o2, ok := to.Object(func(o schema.Object) bool {
-			e2, ok := o.(*schema.EnumType)
-			return ok && e1.T == e2.T
-		})
-		if !ok {
-			changes = append(changes, &schema.DropObject{O: o1})
-			continue
-		}
-		if e2 := o2.(*schema.EnumType); !sqlx.ValuesEqual(e1.Values, e2.Values) {
-			changes = append(changes, &schema.ModifyObject{From: e1, To: e2})
+		switch e1 := o1.(type) {
+		case *schema.EnumType:
+			o2, ok := to.Object(func(o schema.Object) bool {
+				e2, ok := o.(*schema.EnumType)
+				return ok && e1.T == e2.T
+			})
+			if !ok {
+				changes = append(changes, &schema.DropObject{O: o1})
+				continue
+			}
+			if e2 := o2.(*schema.EnumType); !sqlx.ValuesEqual(e1.Values, e2.Values) {
+				changes = append(changes, &schema.ModifyObject{From: e1, To: e2})
+			}
+		case *schema.SQLObject:
+			o2, ok := to.Object(func(o schema.Object) bool {
+				s2, ok := o.(*schema.SQLObject)
+				return ok && e1.Type == s2.Type && e1.Name == s2.Name
+			})
+			if !ok {
+				changes = append(changes, &schema.DropObject{O: o1})
+				continue
+			}
+			s2 := o2.(*schema.SQLObject)
+			if sqlObjectChecksum(e1) != sqlObjectChecksum(s2) {
+				changes = append(changes, &schema.ModifyObject{From: e1, To: s2})
+			}
 		}
 	}
-	// Add new enums.
+	// Add new enums and SQLObjects.
 	for _, o1 := range to.Objects {
-		e1, ok := o1.(*schema.EnumType)
-		if !ok {
-			continue // Unsupported object type.
-		}
-		if _, ok := from.Object(func(o schema.Object) bool {
-			e2, ok := o.(*schema.EnumType)
-			return ok && e1.T == e2.T
-		}); !ok {
-			changes = append(changes, &schema.AddObject{O: e1})
+		switch e1 := o1.(type) {
+		case *schema.EnumType:
+			if _, ok := from.Object(func(o schema.Object) bool {
+				e2, ok := o.(*schema.EnumType)
+				return ok && e1.T == e2.T
+			}); !ok {
+				changes = append(changes, &schema.AddObject{O: e1})
+			}
+		case *schema.SQLObject:
+			if _, ok := from.Object(func(o schema.Object) bool {
+				s2, ok := o.(*schema.SQLObject)
+				return ok && e1.Type == s2.Type && e1.Name == s2.Name
+			}); !ok {
+				changes = append(changes, &schema.AddObject{O: e1})
+			}
 		}
 	}
 	return changes, nil
+}
+
+// sqlObjectChecksum returns a hex-encoded sha256 checksum of the trimmed body of a SQLObject.
+func sqlObjectChecksum(o *schema.SQLObject) string {
+	h := sha256.Sum256([]byte(strings.TrimSpace(o.Body)))
+	return fmt.Sprintf("%x", h)
+}
+
+// reTriggerTable matches the "ON schema.table" clause in a pg_get_triggerdef body.
+var reTriggerTable = regexp.MustCompile(`(?i)\bON\s+(\S+)\s`)
+
+// sqlObjectDropStmt returns the DROP statement for a SQLObject.
+func sqlObjectDropStmt(o *schema.SQLObject) string {
+	schemaName := ""
+	if o.Schema != nil {
+		schemaName = o.Schema.Name + "."
+	}
+	switch o.Type {
+	case "trigger":
+		// pg_get_triggerdef body: "CREATE TRIGGER name ... ON schema.table ..."
+		// We need to extract the table name to emit: DROP TRIGGER IF EXISTS name ON schema.table
+		if m := reTriggerTable.FindStringSubmatch(o.Body); len(m) == 2 {
+			return fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON %s", o.Name, m[1])
+		}
+		return fmt.Sprintf("DROP TRIGGER IF EXISTS %s%s", schemaName, o.Name)
+	default: // "function" and others
+		return fmt.Sprintf("DROP FUNCTION IF EXISTS %s%s", schemaName, o.Name)
+	}
 }
 
 func convertDomains(_ []*sqlspec.Table, domains []*domain, _ *schema.Realm) error {
